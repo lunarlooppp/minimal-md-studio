@@ -1,0 +1,8 @@
+{
+  "appId": "com.workbench.minimalmdstudio",
+  "appName": "Minimal Markdown Studio",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
