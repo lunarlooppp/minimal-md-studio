@@ -10,9 +10,9 @@ export type MarkdownBlock = {
 };
 
 const blankLine = /^\s*$/;
-const headingLine = /^ {0,3}#{1,6}\s+\S/;
+const headingLine = /^ {0,3}#{1,6}(?:\s+\S|\s*$)/;
 const fenceLine = /^ {0,3}(```+|~~~+)/;
-const listLine = /^(\s*)([-+*]|\d+[.)])\s+\S/;
+const listLine = /^(\s*)([-+*]|\d+[.)])(?:\s+\S|\s*$)/;
 const quoteLine = /^ {0,3}>\s?/;
 const tableDividerLine = /^ {0,3}\|?[\s:-]+\|[\s|:-]*$/;
 

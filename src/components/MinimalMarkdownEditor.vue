@@ -497,17 +497,18 @@ function getCurrentDraftContent(preferredBlockId = '') {
   return store.content;
 }
 
-function applyDocumentContent(content: string, pushHistory: boolean) {
+function applyDocumentContent(content: string, pushHistory: boolean, historyOptions: HistoryPushOptions = {}) {
   if (content === store.content) return;
   ensureHistoryDocument();
   store.setContent(content);
   if (pushHistory) {
-    pushHistoryState(content);
+    pushHistoryState(content, historyOptions);
   }
 }
 
 type HistoryPushOptions = {
   blockId?: string;
+  forceMerge?: boolean;
   inputType?: string;
   merge?: boolean;
 };
@@ -523,7 +524,7 @@ function pushHistoryState(content: string, options: HistoryPushOptions = {}) {
     historyIndex.value === history.value.length - 1 &&
     lastHistoryPush.blockId === (options.blockId ?? '') &&
     historyInputGroup(lastHistoryPush.inputType) === historyInputGroup(options.inputType ?? '') &&
-    now - lastHistoryPush.time < 900;
+    (options.forceMerge === true || now - lastHistoryPush.time < 900);
 
   if (shouldMerge && historyIndex.value > 0) {
     history.value = [...history.value.slice(0, historyIndex.value), content];
@@ -671,7 +672,7 @@ function handleEditableBeforeInput(block: MarkdownBlock, event: InputEvent) {
   if (isDeleteInput(event) && isEditableBlockEmpty(block)) {
     event.preventDefault();
     event.stopPropagation();
-    removeEmptyBlock(block);
+    removeEmptyBlock(block, event.inputType);
     return;
   }
 
@@ -929,10 +930,11 @@ function exitEmptyListBlock(block: MarkdownBlock) {
   applyDocumentContent(nextBlocks.filter(shouldKeepMarkdownBlock).join('\n\n'), true);
 }
 
-function removeEmptyBlock(block: MarkdownBlock) {
+function removeEmptyBlock(block: MarkdownBlock, inputType = 'deleteContentBackward') {
   const element = getEditableElement(block.id);
   if (!element || !isElementVisiblyEmpty(element)) return;
 
+  const historyOptions = emptyBlockRemovalHistoryOptions(block, inputType);
   const nextBlocks = blocks.value
     .filter((item) => item.id !== block.id)
     .map((item) => item.markdown)
@@ -945,12 +947,48 @@ function removeEmptyBlock(block: MarkdownBlock) {
 
   if (!nextBlocks.length) {
     pendingFocusIndex.value = 0;
-    applyDocumentContent(emptyParagraph, true);
+    applyDocumentContent(emptyParagraph, true, historyOptions);
     return;
   }
 
   pendingFocusIndex.value = Math.max(0, Math.min(block.index - 1, nextBlocks.length - 1));
-  applyDocumentContent(nextBlocks.join('\n\n'), true);
+  applyDocumentContent(nextBlocks.join('\n\n'), true, historyOptions);
+}
+
+function emptyBlockRemovalHistoryOptions(block: MarkdownBlock, inputType: string): HistoryPushOptions {
+  if (!shouldMergeEmptyBlockRemoval(block)) return {};
+  return { blockId: block.id, forceMerge: true, inputType, merge: true };
+}
+
+function emptyBlockDeletionHistoryOptions(block: MarkdownBlock): HistoryPushOptions {
+  if (!shouldMergeEmptyBlockDeletion(block)) return {};
+  return { blockId: block.id, forceMerge: true, inputType: lastHistoryPush.inputType || 'deleteContentBackward', merge: true };
+}
+
+function shouldMergeEmptyBlockDeletion(block: MarkdownBlock) {
+  return (
+    isStructuralBlockType(block.type) &&
+    lastHistoryPush.blockId === block.id &&
+    historyInputGroup(lastHistoryPush.inputType) === 'delete' &&
+    (isEditableBlockEmpty(block) || isEmptyStructuralBlock(block))
+  );
+}
+
+function shouldMergeEmptyBlockRemoval(block: MarkdownBlock) {
+  return (
+    isStructuralBlockType(block.type) &&
+    lastHistoryPush.blockId === block.id &&
+    historyInputGroup(lastHistoryPush.inputType) === 'delete' &&
+    (dirtyBlocks[block.id] || isEmptyStructuralBlock(block))
+  );
+}
+
+function isStructuralBlockType(type: MarkdownBlock['type']) {
+  return type === 'heading' || type === 'quote' || type === 'list' || type === 'code' || type === 'diagram';
+}
+
+function isEmptyStructuralBlock(block: MarkdownBlock) {
+  return sanitizeEditableText(extractEditableText(block.markdown, block.type)).replace(/\u00a0/g, ' ').trim().length === 0;
 }
 
 function isElementVisiblyEmpty(element: HTMLElement) {
@@ -1896,6 +1934,7 @@ function deleteTableRow(block: MarkdownBlock) {
 }
 
 function deleteBlock(block: MarkdownBlock) {
+  const historyOptions = emptyBlockDeletionHistoryOptions(block);
   commitActiveDirtyBlock();
   selectedBlockId.value = '';
   if (editingDiagramId.value === block.id) {
@@ -1908,7 +1947,7 @@ function deleteBlock(block: MarkdownBlock) {
     .filter(shouldKeepMarkdownBlock);
   const nextIndex = Math.min(block.index, nextBlocks.length - 1);
   pendingFocusIndex.value = nextIndex >= 0 ? nextIndex : null;
-  applyDocumentContent(nextBlocks.join('\n\n'), true);
+  applyDocumentContent(nextBlocks.join('\n\n'), true, historyOptions);
 }
 
 function adjustTableColumnWidth(block: MarkdownBlock, delta: number) {

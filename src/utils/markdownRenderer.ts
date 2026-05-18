@@ -73,7 +73,7 @@ export function renderMarkdownDocument(markdown: string) {
 
 export function extractEditableText(markdown: string, type: MarkdownBlock['type']) {
   if (type === 'heading') {
-    return markdown.replace(/^ {0,3}(#{1,6})\s+/, '');
+    return markdown.replace(/^ {0,3}#{1,6}(?:\s+|$)/, '');
   }
 
   if (type === 'quote') {
@@ -106,7 +106,7 @@ export function extractEditableText(markdown: string, type: MarkdownBlock['type'
   if (type === 'list') {
     return markdown
       .split('\n')
-      .map((line) => line.replace(/^(\s*)([-+*]|\d+[.)])\s+/, '$1'))
+      .map((line) => line.replace(/^(\s*)([-+*]|\d+[.)])(?:\s+|$)/, '$1'))
       .join('\n');
   }
 
@@ -118,7 +118,8 @@ export function applyEditableText(markdown: string, type: MarkdownBlock['type'],
   const normalizedText = preserveTrailingLines ? text.replace(/\r\n?/g, '\n') : text.replace(/\r\n?/g, '\n').trimEnd();
 
   if (type === 'heading') {
-    const prefix = /^ {0,3}(#{1,6})\s+/.exec(markdown)?.[0] ?? '## ';
+    const prefixMatch = /^( {0,3}#{1,6})(?:\s+|$)/.exec(markdown);
+    const prefix = prefixMatch ? `${prefixMatch[1]} ` : '## ';
     return `${prefix}${normalizedText || '未命名标题'}`;
   }
 
@@ -154,7 +155,8 @@ export function applyEditableText(markdown: string, type: MarkdownBlock['type'],
     const textLines = normalizedText.split('\n');
     return textLines
       .map((line, index) => {
-        const marker = /^(\s*)([-+*]|\d+[.)])\s+/.exec(sourceLines[index] ?? sourceLines[0] ?? '- ')?.[0] ?? '- ';
+        const markerMatch = /^(\s*)([-+*]|\d+[.)])(?:\s+|$)/.exec(sourceLines[index] ?? sourceLines[0] ?? '- ');
+        const marker = markerMatch ? `${markerMatch[1]}${markerMatch[2]} ` : '- ';
         return `${marker}${line.trimStart()}`;
       })
       .join('\n');
