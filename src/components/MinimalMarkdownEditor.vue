@@ -917,6 +917,10 @@ function insertBlockAfterEnter(block: MarkdownBlock) {
     return;
   }
 
+  if (block.type === 'list' && insertListItemAfterEnter(block)) {
+    return;
+  }
+
   if (isEditableBlockEmpty(block)) {
     exitEmptyEnteredBlock(block);
     return;
@@ -992,6 +996,98 @@ function nextListMarkdown(markdown: string) {
   if (!ordered) return `${marker.indent}${marker.symbol} `;
 
   return `${marker.indent}${Number(ordered[1]) + 1}${ordered[2]} `;
+}
+
+function insertListItemAfterEnter(block: MarkdownBlock) {
+  const editable = getEditableElement(block.id);
+  const currentItem = getCurrentListItem(editable);
+  if (!editable || !currentItem) return false;
+
+  if (isElementVisiblyEmpty(currentItem)) {
+    exitEmptyListItem(block, currentItem);
+    return true;
+  }
+
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  const nextItem = document.createElement('li');
+
+  if (range && isRangeInsideElement(range, currentItem)) {
+    const tailRange = range.cloneRange();
+    tailRange.setEnd(currentItem, currentItem.childNodes.length);
+    const tail = tailRange.extractContents();
+    nextItem.append(tail);
+    trimZeroWidthTextNodes(currentItem);
+  }
+
+  if (!sanitizeEditableText(nextItem.innerText).trim() && !nextItem.childNodes.length) {
+    nextItem.append(document.createTextNode(emptyParagraph));
+  }
+
+  currentItem.after(nextItem);
+  renumberOrderedListItems(currentItem.closest('ol'));
+  focusEditableStart(nextItem);
+  markBlockDirty(block, 'insertParagraph');
+  return true;
+}
+
+function exitEmptyListItem(block: MarkdownBlock, item: HTMLLIElement) {
+  const editable = getEditableElement(block.id);
+  if (!editable) {
+    exitEmptyEnteredBlock(block);
+    return;
+  }
+
+  const items = Array.from(editable.querySelectorAll<HTMLLIElement>('li'));
+  const itemIndex = items.indexOf(item);
+  if (itemIndex < 0) {
+    exitEmptyEnteredBlock(block);
+    return;
+  }
+
+  const source = listSerializationSource(editable, block.markdown);
+  const beforeMarkdown = serializeListItemsMarkdown(items.slice(0, itemIndex), source.markers.slice(0, itemIndex), source.fallback);
+  const afterFallback = source.markers[itemIndex + 1] ?? source.fallback;
+  const afterMarkdown = serializeListItemsMarkdown(items.slice(itemIndex + 1), source.markers.slice(itemIndex + 1), afterFallback);
+  const replacementBlocks = [beforeMarkdown, emptyParagraph, afterMarkdown].filter(shouldKeepMarkdownBlock);
+  const nextBlocks = blocks.value
+    .flatMap((candidate) => (candidate.id === block.id ? replacementBlocks : [candidate.markdown]))
+    .filter(shouldKeepMarkdownBlock);
+
+  delete dirtyBlocks[block.id];
+  activeBlockId.value = '';
+  pendingFocusIndex.value = block.index + (shouldKeepMarkdownBlock(beforeMarkdown) ? 1 : 0);
+  applyDocumentContent(nextBlocks.join('\n\n'), true);
+}
+
+function getCurrentListItem(editable: HTMLElement | null) {
+  if (!editable) return null;
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  const target = range ? (range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement) : null;
+  return closestInside<HTMLLIElement>(target, 'li', editable) ?? editable.querySelector<HTMLLIElement>('li:last-child');
+}
+
+function renumberOrderedListItems(list: HTMLOListElement | null) {
+  if (!list) return;
+  Array.from(list.children).forEach((child, index) => {
+    if (child instanceof HTMLLIElement) {
+      child.value = index + 1;
+    }
+  });
+}
+
+function trimZeroWidthTextNodes(element: HTMLElement) {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const emptyNodes: Text[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    if (node instanceof Text && node.data === emptyParagraph) {
+      emptyNodes.push(node);
+    }
+    node = walker.nextNode();
+  }
+  emptyNodes.forEach((node) => node.remove());
 }
 
 function placeCommandMenu(x: number, y: number) {
@@ -1140,8 +1236,10 @@ function insertTextAtRange(range: Range, text: string) {
 function insertBreakAtRange(range: Range) {
   range.deleteContents();
   const br = document.createElement('br');
+  const spacer = document.createTextNode(emptyParagraph);
   range.insertNode(br);
-  range.setStartAfter(br);
+  br.after(spacer);
+  range.setStart(spacer, spacer.length);
   range.collapse(true);
   setSelectionRange(range);
 }
@@ -1865,17 +1963,39 @@ function extractRenderedMarkdown(element: HTMLElement, type: MarkdownBlock['type
 }
 
 function serializeEditableListMarkdown(element: HTMLElement, markdown: string) {
-  const sourceMarkers = markdown
-    .split('\n')
-    .map(parseListMarker)
-    .filter((item): item is ListMarker => item !== null);
-  const items = Array.from(element.querySelectorAll('li'));
+  const source = listSerializationSource(element, markdown);
+  const items = Array.from(element.querySelectorAll<HTMLLIElement>('li'));
   if (!items.length) {
     return applyEditableText(markdown, 'list', serializeFlowMarkdown(element));
   }
 
+  return serializeListItemsMarkdown(items, source.markers, source.fallback);
+}
+
+function listSerializationSource(element: HTMLElement, markdown: string) {
+  const sourceMarkers = markdown
+    .split('\n')
+    .map(parseListMarker)
+    .filter((item): item is ListMarker => item !== null);
+  const fallbackMarker = sourceMarkers[0] ?? { indent: '', symbol: element.querySelector('ol') ? '1.' : '-' };
+  return { markers: sourceMarkers, fallback: fallbackMarker };
+}
+
+function serializeListItemsMarkdown(items: HTMLLIElement[], markers: ListMarker[], fallbackMarker: ListMarker) {
+  if (!items.length) {
+    return '';
+  }
+
+  let orderedNumber = orderedListStart(fallbackMarker);
   return items
-    .flatMap((item, index) => serializeListItemMarkdown(item, sourceMarkers[index] ?? sourceMarkers[0] ?? { indent: '', symbol: '-' }))
+    .flatMap((item, index) => {
+      const sourceMarker = markers[index] ?? fallbackMarker;
+      const marker = markerForSerializedItem(item, sourceMarker, orderedNumber);
+      if (orderedNumber !== null) {
+        orderedNumber += 1;
+      }
+      return serializeListItemMarkdown(item, marker);
+    })
     .join('\n');
 }
 
@@ -1894,6 +2014,21 @@ function parseListMarker(line: string): ListMarker | null {
   }
 
   return { indent: marker[1], symbol: marker[2] };
+}
+
+function markerForSerializedItem(item: HTMLLIElement, sourceMarker: ListMarker, orderedNumber: number | null): ListMarker {
+  if (orderedNumber === null) {
+    return sourceMarker;
+  }
+
+  const delimiter = /^(\d+)([.)])$/.exec(sourceMarker.symbol)?.[2] ?? '.';
+  const value = item.value > 0 ? item.value : orderedNumber;
+  return { indent: sourceMarker.indent, symbol: `${value}${delimiter}` };
+}
+
+function orderedListStart(marker: ListMarker) {
+  const ordered = /^(\d+)([.)])$/.exec(marker.symbol);
+  return ordered ? Number(ordered[1]) : null;
 }
 
 function sanitizeEditableText(text: string) {

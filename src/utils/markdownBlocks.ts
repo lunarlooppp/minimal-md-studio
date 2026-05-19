@@ -58,7 +58,7 @@ export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
     } else if (listLine.test(line)) {
       type = 'list';
       cursor += 1;
-      while (cursor < lines.length && !blankLine.test(lines[cursor])) {
+      while (cursor < lines.length && (listLine.test(lines[cursor]) || isListContinuation(lines, cursor))) {
         cursor += 1;
       }
     } else {
@@ -92,7 +92,7 @@ export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
 function startsDetachedBlock(lines: string[], cursor: number) {
   const previous = lines[cursor - 1] ?? '';
   const current = lines[cursor] ?? '';
-  return !blankLine.test(previous) && (headingLine.test(current) || fenceLine.test(current));
+  return !blankLine.test(previous) && (headingLine.test(current) || fenceLine.test(current) || listLine.test(current) || quoteLine.test(current));
 }
 
 function isSoftContinuation(lines: string[], cursor: number) {
@@ -102,6 +102,15 @@ function isSoftContinuation(lines: string[], cursor: number) {
 
   const next = lines[cursor + 1] ?? '';
   return quoteLine.test(next);
+}
+
+function isListContinuation(lines: string[], cursor: number) {
+  const current = lines[cursor] ?? '';
+  if (blankLine.test(current)) {
+    return false;
+  }
+
+  return /^\s+/.test(current);
 }
 
 function escapeRegExp(value: string) {
